@@ -1,21 +1,10 @@
 from xml.etree import ElementTree
-
-class PubArticle1(object):
-    def __init__(self, pmid, abstract):
-        self.pmid = pmid
-        self.abstract = abstract
-
-class PubArticle2(object):
-    def __init__(self, pmid, abstract, background, methods, results):
-        self.pmid = pmid
-        self.abstract = abstract
-        self.background = background
-        self.methods = methods
-        self.results = results
+from dao.article_entity import LabeledArticle, UnlabeledArticle
+from resources.file_paths import *
 
 class XmlDao(object):
     def __init__(self):
-        self.file = 'E:\\data_extraction_forZhaoDanNing\\data\\extraction\\20000pubmed_result.xml'
+        self.file = xml_file
         # self.file = 'E:\\data_extraction_forZhaoDanNing\\data\\extraction\\pubmed_result0522.xml'
 
     def load_file(self):
@@ -47,7 +36,7 @@ class XmlDao(object):
 
             if is_formalized_abstract == False:
                 abstract_text = abstract.find('AbstractText').text
-                article = PubArticle1(pmid, abstract_text)
+                article = UnlabeledArticle(pmid, abstract_text)
                 if abstract_text:
                     unlabeled_articles.append(article)
             else:
@@ -70,7 +59,7 @@ class XmlDao(object):
                 for i in range(results_index, len(abstract)):
                     if abstract[i].text:
                         results = results + abstract[i].text
-                article = PubArticle2(pmid, background + ' '  + methods + ' ' + results, background, methods, results)
+                article = LabeledArticle(pmid, background + ' ' + methods + ' ' + results, background, methods, results)
                 labeled_articles.append(article)
         return labeled_articles, unlabeled_articles
 

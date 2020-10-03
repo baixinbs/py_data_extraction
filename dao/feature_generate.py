@@ -1,4 +1,6 @@
 from dao.xml_dao import XmlDao
+from dao.new_file_dao import NewFileDao
+from resources.file_paths import *
 import numpy as np
 import nltk
 # from keras.models import Sequential, load_model
@@ -7,15 +9,24 @@ import nltk
 # from keras.layers import LSTM
 from gensim.models import Word2Vec
 import pickle
+import joblib
 
 # FEATURE_SIZE = 128
 FEATURE_SIZE = 64
 
 class FeatureGenerator(object):
     def __init__(self):
-        dao = XmlDao()
-        self.labeled_articles, self.unlabeled_articles = dao.load_file()
-        self.sentensor = nltk.data.load('file://E:/nltk_data/tokenizers/punkt/english.pickle')
+        # dao = XmlDao()
+        # self.labeled_articles, self.unlabeled_articles = dao.load_file()
+
+        dao = NewFileDao()
+        labeled_articles1, unlabeled_articles1 = dao.load_file(articles_file1)
+        labeled_articles2, unlabeled_articles2 = dao.load_file(articles_file2)
+        labeled_articles3, unlabeled_articles3 = dao.load_file(articles_file3)
+        self.labeled_articles = labeled_articles1 + labeled_articles2 + labeled_articles3
+        self.unlabeled_articles = unlabeled_articles1 + unlabeled_articles2 + unlabeled_articles3
+
+        self.sentensor = nltk.data.load(nltk_pickle)
         self.w2v_model = self.w2v()
 
     def w2v(self):
@@ -34,9 +45,7 @@ class FeatureGenerator(object):
         w2v_model = Word2Vec(corpus, size=FEATURE_SIZE, window=5, min_count=3, workers=4)
         return w2v_model
 
-    def build_x_y(self):
-        vocab = self.w2v_model.wv.vocab
-
+    def compute_parameters(self):
         # 首先计算训练集的维度
         num_sents = []  # 计算每个摘要最多有多少个句子
         num_words = []  # 计算每个句子最多有多少个单词
@@ -64,13 +73,16 @@ class FeatureGenerator(object):
         print('max_sents: ', max_sents)
         print('max_words: ', max_words)
 
-        # 训练集太大，在自己机器上先用一部分，然后在服务器上跑全量
-        # self.labeled_articles = self.labeled_articles[:3000]
+        return max_sents, max_words
+
+    def build_x_y(self):
+        vocab = self.w2v_model.wv.vocab
+        max_sents, max_words = self.compute_parameters()
 
         # 构建训练集
         x = np.zeros((int(len(self.labeled_articles)), max_sents, max_words, FEATURE_SIZE), dtype=np.float)
-        y = np.zeros((int(len(self.labeled_articles)), max_sents, 3), dtype=np.float)
-        y_location = np.zeros((int(len(self.labeled_articles)), 2), dtype=np.float)
+        classify = np.zeros((int(len(self.labeled_articles)), max_sents, 3), dtype=np.float)
+        y = np.zeros((int(len(self.labeled_articles)), 2), dtype=np.float)
         for i, article in enumerate(self.labeled_articles):
             sentence_b = self.sentensor.tokenize(article.background)
             sentence_m = self.sentensor.tokenize(article.methods)
@@ -79,15 +91,15 @@ class FeatureGenerator(object):
 
             # build y， y是摘要中每一句分类成background/methods/results的onehot结果
             for j in range(min(len(sentence_b), max_sents)):
-                y[i][j][0] = 1.0
+                classify[i][j][0] = 1.0
             for j in range(min(len(sentence_b), max_sents), min(len(sentence_m), max_sents)):
-                y[i][j][1] = 1.0
+                classify[i][j][1] = 1.0
             for j in range(min(len(sentence_m), max_sents), min(len(sentence_r), max_sents)):
-                y[i][j][2] = 1.0
+                classify[i][j][2] = 1.0
 
             # build y_location, y_location是摘要中methods、results首句的位置
-            y_location[i][0] = len(sentence_b)
-            y_location[i][1] = len(sentence_b) + len(sentence_m)
+            y[i][0] = len(sentence_b)
+            y[i][1] = len(sentence_b) + len(sentence_m)
 
             # build x
             for j, sen in enumerate(sentences):
@@ -103,14 +115,40 @@ class FeatureGenerator(object):
                     if k >= max_words:
                         break
                     x[i][j][k] = np.array(self.w2v_model[w])
+        return x, y
 
-        return x, y, y_location
+    def build_x_unlabeled(self):
+        # 从unlabeled_articles构建需要预测的集合
+        vocab = self.w2v_model.wv.vocab
+        max_sents, max_words = self.compute_parameters()
+
+        x = np.zeros((int(len(self.unlabeled_articles)), max_sents, max_words, FEATURE_SIZE), dtype=np.float)
+        for i, article in enumerate(self.unlabeled_articles):
+            sentences = self.sentensor.tokenize(article.abstract)
+            for j, sen in enumerate(sentences):
+                if j >= max_sents:
+                    break
+                words = nltk.word_tokenize(sen)
+                w_stream = []
+                # 先去掉不在vocab里的词
+                for w in words:
+                    if w in vocab:
+                        w_stream.append(w)
+                for k, w in enumerate(w_stream):
+                    if k >= max_words:
+                        break
+                    x[i][j][k] = np.array(self.w2v_model[w])
+        return x
 
 
 if __name__ == '__main__':
     feature_generator = FeatureGenerator()
-    x, y, y_location = feature_generator.build_x_y()
-    with open('E:\\data_extraction_forZhaoDanNing\\data\\pickle\\x_y', 'wb') as f:
-        pickle.dump(x, f)
+
+    x, y = feature_generator.build_x_y()
+    with open(x_y_file, 'wb') as f:
+        joblib.dump(x, f)
         pickle.dump(y, f)
-        pickle.dump(y_location, f)
+
+    x_unlabeled = feature_generator.build_x_unlabeled()
+    with open(x_unlabeled_file, 'wb') as f:
+        joblib.dump(x_unlabeled, f)
